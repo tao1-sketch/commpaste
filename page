@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>댓글 작성자</title>
+<style>
+  :root { --fg:#111; --bg:#fff; --muted:#666; --brand:#0b84ff; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--fg); background:var(--bg); margin:0; padding:24px; }
+  h1 { font-size:18px; margin:0 0 16px; }
+  .row { display:flex; gap:8px; margin:8px 0 16px; flex-wrap:wrap; }
+  input[type="url"] { flex:1 1 360px; padding:10px 12px; border:1px solid #ddd; border-radius:8px; font-size:14px; }
+  button { padding:10px 14px; border:none; border-radius:8px; background:var(--brand); color:#fff; cursor:pointer; font-size:14px; }
+  button:disabled { opacity:.6; cursor:not-allowed; }
+  .muted { color:var(--muted); font-size:12px; }
+  .card { border:1px solid #eee; border-radius:12px; padding:12px; margin:16px 0; }
+  .flex { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  textarea { width:100%; min-height:160px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; padding:10px; border:1px solid #ddd; border-radius:8px; }
+  pre { white-space:pre-wrap; word-break:break-word; background:#fafafa; border:1px solid #eee; border-radius:8px; padding:10px; margin:8px 0 0; }
+  .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#f2f6ff; color:#245; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>댓글 작성자 파서 (정적/클라이언트 전용)</h1>
+
+  <div class="row">
+    <input id="urlInput" type="url" placeholder="https://example.com/article/123" />
+    <button id="fetchBtn">가져와서 파싱</button>
+    <button id="copyBtn" disabled>복사</button>
+  </div>
+  <div class="muted">설명: 이 페이지는 브라우저에서만 동작합니다. 대상 사이트가 CORS를 막으면 <b>아래 HTML 붙여넣기 모드</b>를 사용하세요.</div>
+
+  <div id="status" class="muted" style="margin-top:8px;"></div>
+
+  <div class="card">
+    <div class="flex" style="justify-content:space-between;">
+      <div>
+        <span class="pill">출력</span>
+      </div>
+      <div class="muted" id="count"></div>
+    </div>
+    <pre id="output" aria-live="polite"></pre>
+  </div>
+
+  <div class="card">
+    <div class="flex" style="justify-content:space-between;">
+      <div>
+        <span class="pill">대체 모드: HTML 붙여넣기</span>
+      </div>
+      <div class="muted">CORS로 막힐 때 사용</div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <textarea id="htmlInput" placeholder="여기에 대상 페이지의 HTML 원문을 붙여넣으세요. (모바일 앱/WebView에서 '공유 > 브라우저 열기' 후 페이지 소스 보기로 복사)"></textarea>
+    </div>
+    <div class="row">
+      <button id="parseHtmlBtn">붙여넣은 HTML 파싱</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const $ = sel => document.querySelector(sel);
+  const urlInput = $('#urlInput');
+  const fetchBtn = $('#fetchBtn');
+  const copyBtn = $('#copyBtn');
+  const statusEl = $('#status');
+  const outputEl = $('#output');
+  const countEl = $('#count');
+  const htmlInput = $('#htmlInput');
+  const parseHtmlBtn = $('#parseHtmlBtn');
+
+  function setStatus(msg, isError=false){
+    statusEl.textContent = msg || '';
+    statusEl.style.color = isError ? '#c00' : 'var(--muted)';
+  }
+
+  function extractAuthorsFromDoc(doc){
+    // list-area > (직계) comment-wrapper 들
+    const listArea = doc.querySelector('.list-area');
+    if (!listArea) return [];
+
+    const wrappers = Array.from(listArea.children)
+      .filter(el => el.classList && el.classList.contains('comment-wrapper'));
+
+    const texts = [];
+    wrappers.forEach(wrapper => {
+      // 각 wrapper의 첫 번째 comment-item (직계만)
+      const firstItem = Array.from(wrapper.children)
+        .find(el => el.classList && el.classList.contains('comment-item'));
+      if (!firstItem) return;
+
+      // 그 안의 모든 .user-info 텍스트
+      const userInfos = firstItem.querySelectorAll('.user-info');
+      userInfos.forEach(el => {
+        const t = (el.textContent || '').trim();
+        if (t) texts.push(t);
+      });
+    });
+
+    return texts;
+  }
+
+  function renderResult(arr){
+    outputEl.textContent = arr.join('\n');
+    countEl.textContent = `${arr.length}개`;
+    copyBtn.disabled = arr.length === 0;
+  }
+
+  async function fetchAndParse(url){
+    setStatus('가져오는 중…');
+    try {
+      const res = await fetch(url, { credentials: 'omit', mode: 'cors' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const authors = extractAuthorsFromDoc(doc);
+      renderResult(authors);
+      setStatus('완료');
+    } catch (err) {
+      console.error(err);
+      setStatus('가져오기 실패 (대상 사이트 CORS 또는 네트워크 문제). 아래 "HTML 붙여넣기" 모드를 사용하세요.', true);
+      renderResult([]);
+    }
+  }
+
+  function parsePastedHtml(){
+    const html = htmlInput.value || '';
+    if (!html.trim()){
+      setStatus('붙여넣은 HTML이 없습니다.', true);
+      return;
+    }
+    try{
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const authors = extractAuthorsFromDoc(doc);
+      renderResult(authors);
+      setStatus('붙여넣은 HTML 파싱 완료');
+    }catch(err){
+      console.error(err);
+      setStatus('HTML 파싱 중 오류', true);
+      renderResult([]);
+    }
+  }
+
+  fetchBtn.addEventListener('click', ()=>{
+    const url = (urlInput.value || '').trim();
+    if (!url){
+      setStatus('URL을 입력하세요.', true);
+      return;
+    }
+    fetchAndParse(url);
+  });
+
+  parseHtmlBtn.addEventListener('click', parsePastedHtml);
+
+  copyBtn.addEventListener('click', ()=>{
+    const txt = outputEl.textContent || '';
+    navigator.clipboard?.writeText(txt).then(()=>{
+      setStatus('복사 완료');
+    }).catch(()=>{
+      setStatus('클립보드 권한 불가', true);
+    });
+  });
+})();
+</script>
+</body>
+</html>
